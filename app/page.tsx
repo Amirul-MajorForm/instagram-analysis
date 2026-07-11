@@ -155,9 +155,8 @@ function PostCard({ post, rank, variant }: { post: PostPreview; rank: number; va
         {post.displayUrl && !imgError ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={post.displayUrl}
+            src={`/api/image-proxy?url=${encodeURIComponent(post.displayUrl)}`}
             alt={post.caption || 'Post thumbnail'}
-            referrerPolicy="no-referrer"
             onError={() => setImgError(true)}
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           />
