@@ -82,12 +82,18 @@ async function scrapePosts(profileUrl: string, apifyKey: string): Promise<ApifyP
   const all: ApifyPost[] = await resp.json();
   if (!all?.length) throw new Error('No posts returned. The profile may be private or not found.');
 
-  // Filter to posts owned by the target username (case-insensitive) to avoid
-  // Apify returning posts from related/suggested accounts.
-  const filtered = all.filter(
-    (p) => !p.ownerUsername || p.ownerUsername.toLowerCase() === username.toLowerCase(),
-  );
-  const posts = filtered.length > 0 ? filtered : all;
+  // Determine the dominant owner (handles renamed accounts like giveasia → givefellows).
+  // We only drop posts from entirely different accounts that Apify occasionally mixes in —
+  // collaboration/collab posts that the target account authored are kept regardless.
+  const ownerCounts: Record<string, number> = {};
+  for (const p of all) {
+    if (p.ownerUsername) ownerCounts[p.ownerUsername] = (ownerCounts[p.ownerUsername] || 0) + 1;
+  }
+  const dominantOwner = Object.entries(ownerCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+  const posts = dominantOwner
+    ? all.filter((p) => !p.ownerUsername || p.ownerUsername === dominantOwner)
+    : all;
   return posts;
 }
 
@@ -271,6 +277,7 @@ export async function POST(req: NextRequest) {
     }
 
     const resolvedUsername = posts[0]?.ownerUsername || username;
+    // resolvedUsername reflects the account's current handle (e.g. after a rename)
     return NextResponse.json({
       report,
       topPosts: top,
