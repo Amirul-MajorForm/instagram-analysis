@@ -17,6 +17,9 @@ interface ApifyPost {
   hashtags?: string[];
   url?: string;
   displayUrl?: string;
+  videoThumbnailUrl?: string;
+  thumbnailUrl?: string;
+  images?: { displayUrl?: string; url?: string }[];
   shortCode?: string;
   ownerUsername?: string;
   ownerFullName?: string;
@@ -94,7 +97,7 @@ function engagementScore(post: ApifyPost): number {
 function buildPostPreviews(posts: ApifyPost[]): { top: PostPreview[]; worst: PostPreview[] } {
   const previews: PostPreview[] = posts.map((p) => ({
     url: p.url || (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ''),
-    displayUrl: p.displayUrl || '',
+    displayUrl: p.displayUrl || p.videoThumbnailUrl || p.thumbnailUrl || p.images?.[0]?.displayUrl || p.images?.[0]?.url || '',
     caption: (p.caption || '').slice(0, 140),
     likesCount: p.likesCount || 0,
     commentsCount: p.commentsCount || 0,
