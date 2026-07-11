@@ -145,12 +145,11 @@ function buildPostSummary(posts: ApifyPost[]): string {
 }
 
 function buildPrompt(username: string, posts: ApifyPost[], postSummary: string): string {
-  const ownerUsername = posts[0]?.ownerUsername || username;
   const ownerFullName = posts[0]?.ownerFullName || '';
   const postCount = posts.length;
 
   const meta = [
-    `Username: @${ownerUsername}`,
+    `Username: @${username}`,
     ownerFullName ? `Name: ${ownerFullName}` : '',
   ].filter(Boolean).join('\n');
 
@@ -261,6 +260,12 @@ export async function POST(req: NextRequest) {
       report = JSON.parse(clean);
     } catch {
       throw new Error('Analysis failed to parse. Raw: ' + rawText.slice(0, 200));
+    }
+
+    // Always force the handle to match what the user entered — Claude can infer
+    // the wrong account from ownerUsername fields in the post data.
+    if (report?.profileSnapshot) {
+      report.profileSnapshot.handle = `@${username}`;
     }
 
     return NextResponse.json({
