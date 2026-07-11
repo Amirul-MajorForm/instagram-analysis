@@ -253,6 +253,7 @@ function StatTile({ label, value }: { label: string; value: string | number }) {
 // ── PAGE ───────────────────────────────────────────────────────────────────
 export default function Home() {
   const [url, setUrl] = useState('');
+  const [username, setUsername] = useState('');
   const [view, setView] = useState<View>('input');
   const [error, setError] = useState('');
   const [report, setReport] = useState<Report | null>(null);
@@ -262,14 +263,14 @@ export default function Home() {
   const [meta, setMeta] = useState<{ username?: string; postsScraped?: number } | null>(null);
 
   async function analyse() {
-    if (!url.trim()) return;
+    if (!url.trim() || !username.trim()) return;
     setView('loading');
     setError('');
     try {
       const resp = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), username: username.trim().replace(/^@/, '') }),
       });
       const data = await resp.json();
       if (!resp.ok || data.error) {
@@ -298,6 +299,7 @@ export default function Home() {
     setMeta(null);
     setError('');
     setUrl('');
+    setUsername('');
   }
 
   // Build pillar pie slices from report
@@ -345,15 +347,27 @@ export default function Home() {
               <input
                 className="field-input"
                 type="url"
-                placeholder="https://www.instagram.com/username"
+                placeholder="https://www.instagram.com/nike"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && analyse()}
               />
-              <p className="field-hint">Public profiles only · e.g. https://www.instagram.com/nike</p>
+              <p className="field-hint">Public profiles only</p>
+            </div>
+            <div>
+              <p className="field-label">Instagram Username</p>
+              <input
+                className="field-input"
+                type="text"
+                placeholder="nike"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && analyse()}
+              />
+              <p className="field-hint">Exact username as it appears on Instagram (without @)</p>
             </div>
           </div>
-          <button className="btn-primary" onClick={analyse} disabled={!url.trim()}>
+          <button className="btn-primary" onClick={analyse} disabled={!url.trim() || !username.trim()}>
             Analyse Profile
           </button>
         </div>

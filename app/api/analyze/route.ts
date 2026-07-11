@@ -79,21 +79,8 @@ async function scrapePosts(profileUrl: string, apifyKey: string): Promise<ApifyP
     throw new Error(`Apify error ${resp.status}: ${text.slice(0, 300)}`);
   }
 
-  const all: ApifyPost[] = await resp.json();
-  if (!all?.length) throw new Error('No posts returned. The profile may be private or not found.');
-
-  // Determine the dominant owner (handles renamed accounts like giveasia → givefellows).
-  // We only drop posts from entirely different accounts that Apify occasionally mixes in —
-  // collaboration/collab posts that the target account authored are kept regardless.
-  const ownerCounts: Record<string, number> = {};
-  for (const p of all) {
-    if (p.ownerUsername) ownerCounts[p.ownerUsername] = (ownerCounts[p.ownerUsername] || 0) + 1;
-  }
-  const dominantOwner = Object.entries(ownerCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-
-  const posts = dominantOwner
-    ? all.filter((p) => !p.ownerUsername || p.ownerUsername === dominantOwner)
-    : all;
+  const posts: ApifyPost[] = await resp.json();
+  if (!posts?.length) throw new Error('No posts returned. The profile may be private or not found.');
   return posts;
 }
 
@@ -242,7 +229,7 @@ IMPORTANT:
 
 export async function POST(req: NextRequest) {
   try {
-    const { url } = await req.json();
+    const { url, username: explicitUsername } = await req.json();
     if (!url || typeof url !== 'string') {
       return NextResponse.json({ error: 'Missing url.' }, { status: 400 });
     }
@@ -252,7 +239,7 @@ export async function POST(req: NextRequest) {
     if (!apifyKey) return NextResponse.json({ error: 'APIFY_API_KEY is not configured on the server.' }, { status: 500 });
     if (!anthropicKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY is not configured on the server.' }, { status: 500 });
 
-    const username = extractUsername(url);
+    const username = (explicitUsername as string | undefined)?.trim() || extractUsername(url);
     if (!username) return NextResponse.json({ error: 'Could not extract a username from that URL.' }, { status: 400 });
 
     const posts = await scrapePosts(url, apifyKey);
@@ -276,14 +263,12 @@ export async function POST(req: NextRequest) {
       throw new Error('Analysis failed to parse. Raw: ' + rawText.slice(0, 200));
     }
 
-    const resolvedUsername = posts[0]?.ownerUsername || username;
-    // resolvedUsername reflects the account's current handle (e.g. after a rename)
     return NextResponse.json({
       report,
       topPosts: top,
       worstPosts: worst,
       postTypeCounts,
-      meta: { username: resolvedUsername, postsScraped: posts.length },
+      meta: { username, postsScraped: posts.length },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
