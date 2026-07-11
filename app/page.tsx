@@ -142,6 +142,8 @@ function PostCard({ post, rank, variant }: { post: PostPreview; rank: number; va
   const [imgError, setImgError] = useState(false);
   const accent = variant === 'top' ? 'var(--green)' : 'var(--red)';
   const accentBg = variant === 'top' ? 'var(--green-bg)' : 'var(--red-bg)';
+  const isVideo = post.type === 'Reel' || post.type === 'Video';
+  const proxyUrl = (src: string) => `/api/image-proxy?url=${encodeURIComponent(src)}`;
 
   return (
     <a
@@ -150,12 +152,23 @@ function PostCard({ post, rank, variant }: { post: PostPreview; rank: number; va
       rel="noopener noreferrer"
       style={{ textDecoration: 'none', display: 'block', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg)', transition: 'box-shadow 0.15s' }}
     >
-      {/* Thumbnail */}
+      {/* Thumbnail / Video */}
       <div style={{ position: 'relative', aspectRatio: '1/1', background: 'var(--surface)', overflow: 'hidden' }}>
-        {post.displayUrl && !imgError ? (
+        {isVideo && post.videoUrl && !imgError ? (
+          <video
+            src={proxyUrl(post.videoUrl)}
+            poster={post.displayUrl ? proxyUrl(post.displayUrl) : undefined}
+            controls
+            muted
+            playsInline
+            onError={() => setImgError(true)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            onClick={(e) => e.preventDefault()}
+          />
+        ) : post.displayUrl && !imgError ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={`/api/image-proxy?url=${encodeURIComponent(post.displayUrl)}`}
+            src={proxyUrl(post.displayUrl)}
             alt={post.caption || 'Post thumbnail'}
             onError={() => setImgError(true)}
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}

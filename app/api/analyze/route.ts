@@ -17,6 +17,7 @@ interface ApifyPost {
   hashtags?: string[];
   url?: string;
   displayUrl?: string;
+  videoUrl?: string;
   videoThumbnailUrl?: string;
   thumbnailUrl?: string;
   images?: { displayUrl?: string; url?: string }[];
@@ -28,6 +29,7 @@ interface ApifyPost {
 export interface PostPreview {
   url: string;
   displayUrl: string;
+  videoUrl: string;
   caption: string;
   likesCount: number;
   commentsCount: number;
@@ -77,8 +79,15 @@ async function scrapePosts(profileUrl: string, apifyKey: string): Promise<ApifyP
     throw new Error(`Apify error ${resp.status}: ${text.slice(0, 300)}`);
   }
 
-  const posts: ApifyPost[] = await resp.json();
-  if (!posts?.length) throw new Error('No posts returned. The profile may be private or not found.');
+  const all: ApifyPost[] = await resp.json();
+  if (!all?.length) throw new Error('No posts returned. The profile may be private or not found.');
+
+  // Filter to posts owned by the target username (case-insensitive) to avoid
+  // Apify returning posts from related/suggested accounts.
+  const filtered = all.filter(
+    (p) => !p.ownerUsername || p.ownerUsername.toLowerCase() === username.toLowerCase(),
+  );
+  const posts = filtered.length > 0 ? filtered : all;
   return posts;
 }
 
@@ -98,6 +107,7 @@ function buildPostPreviews(posts: ApifyPost[]): { top: PostPreview[]; worst: Pos
   const previews: PostPreview[] = posts.map((p) => ({
     url: p.url || (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ''),
     displayUrl: p.displayUrl || p.videoThumbnailUrl || p.thumbnailUrl || p.images?.[0]?.displayUrl || p.images?.[0]?.url || '',
+    videoUrl: p.videoUrl || '',
     caption: (p.caption || '').slice(0, 140),
     likesCount: p.likesCount || 0,
     commentsCount: p.commentsCount || 0,
@@ -260,12 +270,13 @@ export async function POST(req: NextRequest) {
       throw new Error('Analysis failed to parse. Raw: ' + rawText.slice(0, 200));
     }
 
+    const resolvedUsername = posts[0]?.ownerUsername || username;
     return NextResponse.json({
       report,
       topPosts: top,
       worstPosts: worst,
       postTypeCounts,
-      meta: { username, postsScraped: posts.length },
+      meta: { username: resolvedUsername, postsScraped: posts.length },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
