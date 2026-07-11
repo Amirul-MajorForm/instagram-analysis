@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import type { PostPreview, PostTypeCount } from './api/analyze/route';
 
 type View = 'input' | 'loading' | 'error' | 'report';
 
@@ -8,6 +9,7 @@ interface ContentPillar {
   name: string;
   description: string;
   frequency: string;
+  count: number;
   topPost: string;
   strategicPurpose: string;
 }
@@ -56,12 +58,19 @@ interface Report {
 }
 
 const PILLAR_COLORS = [
-  { bg: '#eff6ff', border: '#bfdbfe', label: '#1d4ed8' },
-  { bg: '#f0fdf4', border: '#bbf7d0', label: '#15803d' },
-  { bg: '#fdf4ff', border: '#e9d5ff', label: '#7e22ce' },
-  { bg: '#fff7ed', border: '#fed7aa', label: '#c2410c' },
-  { bg: '#fefce8', border: '#fde68a', label: '#92400e' },
+  { bg: '#eff6ff', border: '#bfdbfe', label: '#1d4ed8', chart: '#3b82f6' },
+  { bg: '#f0fdf4', border: '#bbf7d0', label: '#15803d', chart: '#22c55e' },
+  { bg: '#fdf4ff', border: '#e9d5ff', label: '#7e22ce', chart: '#a855f7' },
+  { bg: '#fff7ed', border: '#fed7aa', label: '#c2410c', chart: '#f97316' },
+  { bg: '#fefce8', border: '#fde68a', label: '#92400e', chart: '#eab308' },
 ];
+
+const POST_TYPE_COLORS: Record<string, string> = {
+  Reel:     '#8b5cf6',
+  Image:    '#3b82f6',
+  Carousel: '#f59e0b',
+  Video:    '#06b6d4',
+};
 
 function hookStrengthColor(s: string) {
   if (s === 'strong') return { color: 'var(--green)', bg: 'var(--green-bg)' };
@@ -69,6 +78,131 @@ function hookStrengthColor(s: string) {
   return { color: 'var(--amber)', bg: 'var(--amber-bg)' };
 }
 
+// ── PIE CHART ──────────────────────────────────────────────────────────────
+interface PieSlice { label: string; count: number; color: string }
+
+function PieChart({ slices, title }: { slices: PieSlice[]; title: string }) {
+  const total = slices.reduce((s, d) => s + d.count, 0);
+  if (total === 0) return null;
+
+  const cx = 80, cy = 80, r = 68;
+  let angle = -90; // start at top
+
+  const paths = slices.map((s) => {
+    const pct = s.count / total;
+    const sweep = pct * 360;
+    const startAngle = angle;
+    const endAngle = angle + sweep;
+    angle = endAngle;
+
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const x1 = cx + r * Math.cos(toRad(startAngle));
+    const y1 = cy + r * Math.sin(toRad(startAngle));
+    const x2 = cx + r * Math.cos(toRad(endAngle));
+    const y2 = cy + r * Math.sin(toRad(endAngle));
+    const largeArc = sweep > 180 ? 1 : 0;
+
+    // Full circle edge case
+    if (pct >= 1) {
+      return `M ${cx} ${cy} m -${r} 0 a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 -${r * 2} 0`;
+    }
+
+    return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+  });
+
+  return (
+    <div style={{ padding: '16px 18px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-tertiary)', marginBottom: 16 }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+        <svg width={160} height={160} viewBox="0 0 160 160" style={{ flexShrink: 0 }}>
+          {paths.map((d, i) => (
+            <path key={i} d={d} fill={slices[i].color} stroke="var(--bg)" strokeWidth={1.5} />
+          ))}
+        </svg>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+          {slices.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{s.label}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>
+                {s.count} <span style={{ fontWeight: 400, color: 'var(--text-tertiary)' }}>({Math.round((s.count / total) * 100)}%)</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── POST PREVIEW CARD ──────────────────────────────────────────────────────
+function PostCard({ post, rank, variant }: { post: PostPreview; rank: number; variant: 'top' | 'worst' }) {
+  const [imgError, setImgError] = useState(false);
+  const accent = variant === 'top' ? 'var(--green)' : 'var(--red)';
+  const accentBg = variant === 'top' ? 'var(--green-bg)' : 'var(--red-bg)';
+
+  return (
+    <a
+      href={post.url || '#'}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{ textDecoration: 'none', display: 'block', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg)', transition: 'box-shadow 0.15s' }}
+    >
+      {/* Thumbnail */}
+      <div style={{ position: 'relative', aspectRatio: '1/1', background: 'var(--surface)', overflow: 'hidden' }}>
+        {post.displayUrl && !imgError ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={post.displayUrl}
+            alt={post.caption || 'Post thumbnail'}
+            referrerPolicy="no-referrer"
+            onError={() => setImgError(true)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+        ) : (
+          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width={32} height={32} viewBox="0 0 24 24" fill="none" style={{ opacity: 0.2 }}>
+              <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.5"/>
+              <circle cx="8.5" cy="8.5" r="1.5" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+            </svg>
+          </div>
+        )}
+        {/* Rank badge */}
+        <div style={{ position: 'absolute', top: 8, left: 8, padding: '3px 7px', borderRadius: 3, background: accentBg, color: accent, fontSize: 10, fontWeight: 700, letterSpacing: '0.05em' }}>
+          #{rank}
+        </div>
+        {/* Type badge */}
+        <div style={{ position: 'absolute', top: 8, right: 8, padding: '3px 7px', borderRadius: 3, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em' }}>
+          {post.type}
+        </div>
+      </div>
+      {/* Stats */}
+      <div style={{ padding: '10px 12px' }}>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>{(post.likesCount || 0).toLocaleString()}</strong> likes
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>{(post.commentsCount || 0).toLocaleString()}</strong> comments
+          </span>
+        </div>
+        {post.caption && (
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {post.caption}
+          </p>
+        )}
+        {post.date && (
+          <p style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 4 }}>{post.date}</p>
+        )}
+      </div>
+    </a>
+  );
+}
+
+// ── SHARED COMPONENTS ──────────────────────────────────────────────────────
 function Divider({ label }: { label: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, marginTop: 8 }}>
@@ -104,11 +238,15 @@ function StatTile({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+// ── PAGE ───────────────────────────────────────────────────────────────────
 export default function Home() {
   const [url, setUrl] = useState('');
   const [view, setView] = useState<View>('input');
   const [error, setError] = useState('');
   const [report, setReport] = useState<Report | null>(null);
+  const [topPosts, setTopPosts] = useState<PostPreview[]>([]);
+  const [worstPosts, setWorstPosts] = useState<PostPreview[]>([]);
+  const [postTypeCounts, setPostTypeCounts] = useState<PostTypeCount[]>([]);
   const [meta, setMeta] = useState<{ username?: string; postsScraped?: number } | null>(null);
 
   async function analyse() {
@@ -128,6 +266,9 @@ export default function Home() {
         return;
       }
       setReport(data.report);
+      setTopPosts(data.topPosts || []);
+      setWorstPosts(data.worstPosts || []);
+      setPostTypeCounts(data.postTypeCounts || []);
       setMeta(data.meta);
       setView('report');
     } catch (e) {
@@ -139,10 +280,28 @@ export default function Home() {
   function reset() {
     setView('input');
     setReport(null);
+    setTopPosts([]);
+    setWorstPosts([]);
+    setPostTypeCounts([]);
     setMeta(null);
     setError('');
     setUrl('');
   }
+
+  // Build pillar pie slices from report
+  const pillarSlices: PieSlice[] = report
+    ? report.contentPillars.slice(0, 5).map((p, i) => ({
+        label: p.name,
+        count: p.count || 0,
+        color: PILLAR_COLORS[i].chart,
+      })).filter(s => s.count > 0)
+    : [];
+
+  const postTypeSlices: PieSlice[] = postTypeCounts.map((pt) => ({
+    label: pt.type,
+    count: pt.count,
+    color: POST_TYPE_COLORS[pt.type] || '#94a3b8',
+  }));
 
   return (
     <>
@@ -166,7 +325,7 @@ export default function Home() {
           <p className="setup-eyebrow">Creative Intelligence</p>
           <h1 className="setup-title">Instagram Profile Analysis</h1>
           <p className="setup-sub">
-            Drop in any public Instagram profile URL. Claude analyses the last 30 posts and returns a structured creative strategy report — content pillars, hook patterns, copy strategy, engagement signals, and ad potential.
+            Drop in any public Instagram profile URL. Claude analyses the last 50 posts and returns a structured creative strategy report — content pillars, hook patterns, copy strategy, engagement signals, and ad potential.
           </p>
           <div className="field-group">
             <div>
@@ -191,8 +350,8 @@ export default function Home() {
       {view === 'loading' && (
         <div className="loading-state">
           <div className="spinner" />
-          <p className="loading-text">Scraping & analysing...</p>
-          <p className="loading-sub">Pulling the last 30 posts via Apify then running Claude creative analysis. Takes 30–90 seconds.</p>
+          <p className="loading-text">Scraping &amp; analysing…</p>
+          <p className="loading-sub">Pulling the last 50 posts via Apify then running Claude creative analysis. Takes 60–120 seconds.</p>
         </div>
       )}
 
@@ -213,11 +372,37 @@ export default function Home() {
             <h1 className="setup-title" style={{ marginBottom: 4 }}>{report.profileSnapshot.handle}</h1>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
               {report.profileSnapshot.niche}&nbsp;·&nbsp;{report.profileSnapshot.overallTone}
-              {meta?.postsScraped ? `&nbsp;·&nbsp;${meta.postsScraped} posts analysed` : ''}
+              {meta?.postsScraped ? ` · ${meta.postsScraped} posts analysed` : ''}
             </p>
             <div style={{ padding: '16px 20px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
               {report.profileSnapshot.aestheticSummary}
             </div>
+          </div>
+
+          {/* Post type & pillar distribution */}
+          <Divider label="Content Mix" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 40 }}>
+            <PieChart slices={postTypeSlices} title="Post Type Breakdown" />
+            <PieChart
+              slices={pillarSlices.length > 0 ? pillarSlices : []}
+              title="Content Pillar Distribution"
+            />
+          </div>
+
+          {/* Top posts */}
+          <Divider label="Top 3 Posts by Engagement" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 40 }}>
+            {topPosts.map((post, i) => (
+              <PostCard key={i} post={post} rank={i + 1} variant="top" />
+            ))}
+          </div>
+
+          {/* Worst posts */}
+          <Divider label="Lowest 3 Posts by Engagement" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 40 }}>
+            {worstPosts.map((post, i) => (
+              <PostCard key={i} post={post} rank={i + 1} variant="worst" />
+            ))}
           </div>
 
           {/* Content Pillars */}
@@ -337,7 +522,7 @@ export default function Home() {
           {/* Verdict */}
           <Divider label="Strategist Verdict" />
           <div style={{ padding: '20px 24px', background: 'var(--accent)', borderRadius: 8 }}>
-            <p style={{ fontSize: 14, color: '#fff', lineHeight: 1.75, fontWeight: 500 }}>{report.strategistVerdict}</p>
+            <p style={{ fontSize: 14, color: 'var(--accent-fg)', lineHeight: 1.75, fontWeight: 500 }}>{report.strategistVerdict}</p>
           </div>
 
         </div>
