@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 
-const APIFY_ACTOR = 'apify~instagram-profile-scraper';
+// instagram-scraper supports resultsType:"posts" with proper pagination
+const APIFY_ACTOR = 'apify~instagram-scraper';
 const POST_LIMIT = 50;
 
 interface ApifyPost {
@@ -17,16 +18,8 @@ interface ApifyPost {
   url?: string;
   displayUrl?: string;
   shortCode?: string;
-}
-
-interface ApifyProfile {
-  username?: string;
-  fullName?: string;
-  biography?: string;
-  followersCount?: number;
-  postsCount?: number;
-  isVerified?: boolean;
-  latestPosts?: ApifyPost[];
+  ownerUsername?: string;
+  ownerFullName?: string;
 }
 
 export interface PostPreview {
@@ -56,16 +49,23 @@ function extractUsername(url: string): string | null {
   }
 }
 
-async function scrapeProfile(profileUrl: string, apifyKey: string): Promise<ApifyProfile> {
+async function scrapePosts(profileUrl: string, apifyKey: string): Promise<ApifyPost[]> {
   const username = extractUsername(profileUrl);
   if (!username) throw new Error('Could not extract a username from that URL.');
 
+  const igUrl = `https://www.instagram.com/${username}/`;
+
   const resp = await fetch(
-    `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${apifyKey}&timeout=180&memory=512`,
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${apifyKey}&timeout=180&memory=1024`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ usernames: [username], resultsLimit: POST_LIMIT }),
+      body: JSON.stringify({
+        directUrls: [igUrl],
+        resultsType: 'posts',
+        resultsLimit: POST_LIMIT,
+        addParentData: false,
+      }),
     },
   );
 
@@ -74,9 +74,9 @@ async function scrapeProfile(profileUrl: string, apifyKey: string): Promise<Apif
     throw new Error(`Apify error ${resp.status}: ${text.slice(0, 300)}`);
   }
 
-  const items: ApifyProfile[] = await resp.json();
-  if (!items?.length) throw new Error('No data returned. The profile may be private or the username is incorrect.');
-  return items[0];
+  const posts: ApifyPost[] = await resp.json();
+  if (!posts?.length) throw new Error('No posts returned. The profile may be private or not found.');
+  return posts;
 }
 
 function normaliseType(post: ApifyPost): string {
@@ -119,39 +119,34 @@ function buildPostTypeCounts(posts: ApifyPost[]): PostTypeCount[] {
 }
 
 function buildPostSummary(posts: ApifyPost[]): string {
-  return posts
-    .slice(0, POST_LIMIT)
-    .map((p, i) => {
-      const type = normaliseType(p);
-      const caption = (p.caption || '').slice(0, 400);
-      const likes = p.likesCount ?? '?';
-      const comments = p.commentsCount ?? '?';
-      const views = p.videoViewCount ?? p.videoPlayCount ?? null;
-      const hashtags = (p.hashtags || []).join(' ');
-      const date = p.timestamp ? new Date(p.timestamp).toISOString().split('T')[0] : 'unknown';
-      return [
-        `Post ${i + 1} [${type.toUpperCase()}] — ${date}`,
-        `Engagement: ${likes} likes, ${comments} comments${views ? `, ${views} views` : ''}`,
-        `Caption: ${caption || '(no caption)'}`,
-        hashtags ? `Hashtags: ${hashtags}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-    })
-    .join('\n\n---\n\n');
+  return posts.map((p, i) => {
+    const type = normaliseType(p);
+    const caption = (p.caption || '').slice(0, 400);
+    const likes = p.likesCount ?? '?';
+    const comments = p.commentsCount ?? '?';
+    const views = p.videoViewCount ?? p.videoPlayCount ?? null;
+    const hashtags = (p.hashtags || []).join(' ');
+    const date = p.timestamp ? new Date(p.timestamp).toISOString().split('T')[0] : 'unknown';
+    return [
+      `Post ${i + 1} [${type.toUpperCase()}] — ${date}`,
+      `Engagement: ${likes} likes, ${comments} comments${views ? `, ${views} views` : ''}`,
+      `Caption: ${caption || '(no caption)'}`,
+      hashtags ? `Hashtags: ${hashtags}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }).join('\n\n---\n\n');
 }
 
-function buildPrompt(profile: ApifyProfile, postSummary: string, postCount: number): string {
+function buildPrompt(username: string, posts: ApifyPost[], postSummary: string): string {
+  const ownerUsername = posts[0]?.ownerUsername || username;
+  const ownerFullName = posts[0]?.ownerFullName || '';
+  const postCount = posts.length;
+
   const meta = [
-    `Username: @${profile.username || 'unknown'}`,
-    profile.fullName ? `Name: ${profile.fullName}` : '',
-    profile.biography ? `Bio: ${profile.biography}` : '',
-    profile.followersCount != null ? `Followers: ${profile.followersCount.toLocaleString()}` : '',
-    profile.postsCount != null ? `Total posts: ${profile.postsCount}` : '',
-    profile.isVerified ? 'Verified: yes' : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
+    `Username: @${ownerUsername}`,
+    ownerFullName ? `Name: ${ownerFullName}` : '',
+  ].filter(Boolean).join('\n');
 
   return `You are a senior creative strategist specialising in social media content and paid advertising. Analyse the Instagram profile and its last ${postCount} posts below. Return a structured, actionable report as JSON. Be specific and evidence-based — reference actual captions, post types, and patterns from the data.
 
@@ -168,7 +163,7 @@ Return ONLY valid JSON matching this exact structure — no markdown fences, no 
     "handle": "@username",
     "niche": "one-line niche description",
     "followerCount": 0,
-    "postsAnalysed": 0,
+    "postsAnalysed": ${postCount},
     "overallTone": "2-3 word tone summary",
     "aestheticSummary": "2 sentences on visual style and aesthetic consistency"
   },
@@ -238,13 +233,13 @@ export async function POST(req: NextRequest) {
     if (!apifyKey) return NextResponse.json({ error: 'APIFY_API_KEY is not configured on the server.' }, { status: 500 });
     if (!anthropicKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY is not configured on the server.' }, { status: 500 });
 
-    const profile = await scrapeProfile(url, apifyKey);
-    const posts = profile.latestPosts || [];
-    if (!posts.length) throw new Error('No posts found. The account may be private.');
+    const username = extractUsername(url);
+    if (!username) return NextResponse.json({ error: 'Could not extract a username from that URL.' }, { status: 400 });
 
+    const posts = await scrapePosts(url, apifyKey);
     const { top, worst } = buildPostPreviews(posts);
     const postTypeCounts = buildPostTypeCounts(posts);
-    const prompt = buildPrompt(profile, buildPostSummary(posts), posts.length);
+    const prompt = buildPrompt(username, posts, buildPostSummary(posts));
 
     const client = new Anthropic({ apiKey: anthropicKey });
     const message = await client.messages.create({
@@ -267,7 +262,7 @@ export async function POST(req: NextRequest) {
       topPosts: top,
       worstPosts: worst,
       postTypeCounts,
-      meta: { username: profile.username, postsScraped: posts.length, followersCount: profile.followersCount },
+      meta: { username, postsScraped: posts.length },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
